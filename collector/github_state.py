@@ -1,5 +1,5 @@
 """Sanitised public telemetry only; never write credentials, notebook source or dataset rows."""
-import base64,json,os,urllib.request,urllib.error
+import base64,json,os,time,urllib.request,urllib.error
 from pathlib import Path
 REPO=os.environ.get('GITHUB_REPOSITORY','mm4you/log-zaloai-telemetry')
 BRANCH='telemetry'
@@ -21,7 +21,7 @@ def load():
 
 def publish(state):
  # The producer only constructs numeric/config/event fields; raw logs never reach this function.
- allowed={'schema','config','asr','events','updatedAt','source','status','step','hours','baseline','phase','train','evaluations','references','history'}
+ allowed={'schema','config','asr','asrLogs','agentEvaluations','events','updatedAt','source','status','step','hours','baseline','phase','train','evaluations','references','history'}
  payload={k:v for k,v in state.items() if k in allowed}
  raw=json.dumps(payload,ensure_ascii=False,allow_nan=False).encode()
  if len(raw)>200000:raise ValueError('Telemetry payload too large')
@@ -35,11 +35,21 @@ def publish(state):
    # An orphan data branch cannot overwrite source history or trigger application builds.
    tree=request('/git/trees',{'tree':[{'path':'vercel.json','mode':'100644','type':'blob','content':'{"git":{"deploymentEnabled":false}}'},{'path':'latest.json','mode':'100644','type':'blob','content':raw.decode()}]},'POST')
    commit=request('/git/commits',{'message':'Initial sanitised telemetry [skip ci]','tree':tree['sha'],'parents':[]},'POST')
-   request('/git/refs',{'ref':'refs/heads/'+BRANCH,'sha':commit['sha']},'POST');return
+   request('/git/refs',{'ref':'refs/heads/'+BRANCH,'sha':commit['sha']},'POST');frame(raw);return
   old=None
  body={'branch':BRANCH,'message':'Update sanitised telemetry [skip ci]','content':base64.b64encode(raw).decode()}
  if old:body['sha']=old['sha']
  request('/contents/latest.json',body,'PUT')
+ frame(raw)
+
+def frame(raw):
+ # Write the next minute before readers request it. Each path is immutable once created.
+ for slot in [int(time.time()//60),int(time.time()//60)+1]:
+  path=f'/contents/frames/{slot}.json'
+  try:request(path+'?ref='+BRANCH);continue
+  except urllib.error.HTTPError as error:
+   if error.code!=404:raise
+  request(path,{'branch':BRANCH,'message':'Publish immutable minute frame [skip ci]','content':base64.b64encode(raw).decode()},'PUT')
 
 def dispatch_successor():
  request('/actions/workflows/kaggle-telemetry.yml/dispatches',{'ref':'main'},'POST')

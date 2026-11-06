@@ -57,13 +57,41 @@ def parse(state,text,asr):
    if total:state['config']['targetStep']=total
    state['phase']='training'
   parse_line(state,line)
+ if not asr:
+  agent=[]
+  for m in re.finditer(r'AGENT_EVAL: (\{[^\n]+\})',text):
+   try:
+    d=json.loads(m[1]);row={'step':int(d['step']),'agentScore':float(d['agent_score']),'stateMatch':float(d['state_match_rate']),'toolF1':float(d['tool_f1']),'improved':bool(d['improved'])}
+    if d.get('diagnostic_loss') is not None:row['diagnosticLoss']=float(d['diagnostic_loss'])
+    agent.append(row)
+   except (ValueError,KeyError,TypeError):pass
+  state['agentEvaluations']=list({r['step']:r for r in agent}.values())[-1000:]
  if asr:
+  logs=[]
+  seen=set()
+  for line in text.splitlines():
+   if not line.strip().startswith('{'):continue
+   try:
+    d=ast.literal_eval(line.strip())
+    if 'loss' not in d:continue
+    row={'loss':float(d['loss']),'epoch':float(d['epoch']) if 'epoch' in d else None}
+    for a,b in [('learningRate','learning_rate'),('gradNorm','grad_norm')]:
+     if b in d:row[a]=float(d[b])
+    key=json.dumps(row,sort_keys=True)
+    if key not in seen:logs.append(row);seen.add(key)
+   except (ValueError,SyntaxError,TypeError):pass
+  state['asrLogs']=logs[-2000:]
   info=state.setdefault('asr',{'stage':'preparing','baselineWer':None,'fineTunedWer':None,'cachedClips':None,'totalClips':None})
   for marker,key in [('ASR BASE','baselineWer'),('ASR FINETUNED','fineTunedWer')]:
    for match in re.finditer(marker+r' (\{[^\n]+\})',text):
-    try:info[key]=float(ast.literal_eval(match[1])['wer'])
+    try:
+     metric=ast.literal_eval(match[1]);info[key]=float(metric['wer'])
+     side='Before' if key=='baselineWer' else 'After'
+     for a,b in [('cer','cer'),('exact','exact_match'),('clips','clips')]:
+      if b in metric:info[a+side]=float(metric[b])
     except (ValueError,KeyError,SyntaxError):pass
   if info['baselineWer'] is not None:info['stage']='training'
+  if 'train_runtime' in text:info['stage']='evaluating'
   if 'ASR FINETUNED' in text:info['stage']='evaluating'
   if 'ASR SELECTION' in text:info['stage']='transcribing'
   shards={}
@@ -76,7 +104,8 @@ def parse(state,text,asr):
   training_text=text.split('trainable params:',1)[-1].split('ASR FINETUNED',1)[0]
   progress=list(re.finditer(r'(\d+)\s*/\s*(\d+)\s*\[([\d:]+)<',training_text))
   if progress:
-   latest=progress[-1];state['step']=int(latest[1]);state['config']['targetStep']=int(latest[2]);state['phase']='training'
+   horizon=int(progress[0][2]);progress=[x for x in progress if int(x[2])==horizon]
+   latest=progress[-1];state['step']=int(latest[1]);state['config']['targetStep']=int(latest[2]);state['phase']='evaluating' if info['stage']=='evaluating' else 'training'
    parts=[int(x) for x in latest[3].split(':')]
    state['hours']=sum(value*60**i for i,value in enumerate(reversed(parts)))/3600
  state['events']=events(text,'ASR' if asr else 'Qwen',state.get('events',[]))
@@ -91,7 +120,7 @@ def events(text,stage,previous):
   if line.startswith('+ pip install'):add('Cài thư viện')
   if 'Fetching ' in line and 'files' in line:add('Tải model từ Hugging Face')
   p=re.search(r'(\d+)\s*/\s*(\d+)\s*\[([\d:]+)<',line)
-  if p:add(f'Bước {p[1]}/{p[2]} · thời gian {p[3]}')
+  if p:add(f'Tiến độ {p[1]}/{p[2]} · thời gian {p[3]}')
   for marker in ['ASR BASE','ASR FINETUNED']:
    if line.startswith(marker+' '):
     try:
@@ -113,7 +142,7 @@ def events(text,stage,previous):
    try:
     d=ast.literal_eval(line)
     for k in ['loss','eval_loss']:
-     if k in d and isinstance(d[k],(int,float)):add(f'{k}: {d[k]:.6f}')
+     if k in d:add(f'{k}: {float(d[k]):.6f}')
    except (ValueError,SyntaxError):pass
   if 'Saving model checkpoint' in line:
    m=re.search(r'checkpoint-(\d+)',line)
@@ -142,7 +171,7 @@ def main():
   status=cmd('kernels','status',handle)
   text=stream(handle)
   same=previous['config']['kernel']==handle
-  state=previous if same else dict(schema=2,config=c,updatedAt=utc(),source='kaggle',status='unknown',phase='preparing',step=0,hours=0,baseline=None,train=[],evaluations=[],references=[],history=previous.get('history',[]),events=previous.get('events',[]),**({'asr':previous['asr']} if 'asr' in previous else {}))
+  state=previous if same else dict(schema=2,config=c,updatedAt=utc(),source='kaggle',status='unknown',phase='preparing',step=0,hours=0,baseline=None,train=[],evaluations=[],references=[],history=previous.get('history',[]),events=previous.get('events',[]),asrLogs=previous.get('asrLogs',[]),agentEvaluations=previous.get('agentEvaluations',[]),**({'asr':previous['asr']} if 'asr' in previous else {}))
   state['config']=c
   state=parse(state,text,asr)
   state.update(updatedAt=utc(),source='kaggle')
