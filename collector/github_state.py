@@ -20,6 +20,13 @@ def load():
   return json.loads((Path(__file__).resolve().parents[1]/'public/snapshot.json').read_text(encoding='utf-8-sig'))
 
 def publish(state):
+ current=state['config']['version'];history=state.setdefault('history',[])
+ entry=next((r for r in history if r['version']==current),None)
+ if entry is None:
+  entry={'version':current,'status':state['status'],'detail':''};history.insert(0,entry)
+ entry.update(status=state['status'],detail='ASR' if 'whisper' in (state['config'].get('model') or '').lower() else 'Qwen')
+ for row in history:
+  if row['version']!=current and row.get('detail')=='Phiên đang xem':row['detail']='Phiên trước'
  # The producer only constructs numeric/config/event fields; raw logs never reach this function.
  allowed={'schema','config','asr','asrLogs','agentEvaluations','events','updatedAt','source','status','step','hours','baseline','phase','train','evaluations','references','history'}
  payload={k:v for k,v in state.items() if k in allowed}
