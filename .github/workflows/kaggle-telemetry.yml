@@ -1,0 +1,39 @@
+name: Kaggle telemetry
+on:
+  workflow_dispatch:
+    inputs:
+      watch_seconds:
+        description: Worker duration (seconds)
+        required: false
+        default: '3300'
+  schedule:
+    - cron: '7,37 * * * *'
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: kaggle-telemetry
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      LIFEMATE_ENDPOINT: https://log-zaloai.vercel.app/api/telemetry
+      WATCH_SECONDS: ${{ inputs.watch_seconds || '3300' }}
+      PYTHONUNBUFFERED: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --disable-pip-version-check kaggle==2.2.5 six==1.17.0
+      - run: python -u collector/cloud_watch.py
+      - name: Hand off to next cloud worker
+        if: ${{ always() && !cancelled() }}
+        run: python -c "import sys; sys.path.insert(0,'collector'); from pathlib import Path; from github_state import dispatch_successor; print('Monitoring complete') if Path('.local-state/monitor-terminal').exists() else dispatch_successor()"
+
+
