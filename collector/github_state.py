@@ -48,6 +48,12 @@ def publish(state):
  if old:body['sha']=old['sha']
  request('/contents/latest.json',body,'PUT')
  frame(raw)
+ if state['status'] in ['complete','error']:
+  body={'branch':BRANCH,'message':'Preserve final notebook status [skip ci]','content':base64.b64encode(raw).decode()}
+  try:body['sha']=request('/contents/terminal.json?ref='+BRANCH)['sha']
+  except urllib.error.HTTPError as error:
+   if error.code!=404:raise
+  request('/contents/terminal.json',body,'PUT')
 
 def frame(raw):
  # Write the next minute before readers request it. Each path is immutable once created.
