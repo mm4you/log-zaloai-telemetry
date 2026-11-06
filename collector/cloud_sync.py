@@ -117,6 +117,15 @@ def events(text,stage,previous):
   if message not in seen:rows.append({'stage':stage,'message':message[:240],'level':level});seen.add(message)
  for line in text.splitlines():
   line=line.strip()
+  if line.startswith('EVAL_SAMPLE '):
+   try:
+    d=json.loads(line.split(' ',1)[1]);add(f"Đánh giá {d['n']}/{d['total']} · replay tạm {d['avg']:.2f}% · {d['sec']:.1f}s")
+   except (ValueError,KeyError):pass
+  if line.startswith('MEMORY_SMOKE_START:'):add('Bắt đầu kiểm tra VRAM ở giới hạn context')
+  if line.startswith('MEMORY_SMOKE_OK:'):
+   try:
+    d=json.loads(line.split(':',1)[1]);add(f"VRAM smoke đạt · {d['context_tokens']} token · peak {d['peak_vram_gib']:.3f} GiB")
+   except (ValueError,KeyError):pass
   if line.startswith('GPU_PREFLIGHT '):
    try:
     d=json.loads(line.split(' ',1)[1]);add(f"GPU preflight · CUDA {d['cuda_build']} · {d['count']} GPU · {'sẵn sàng' if d['available'] else 'không khả dụng'}")
@@ -169,6 +178,10 @@ def main():
    request=ApiGetKernelRequest();request.user_name=TRAIN.split('/')[0];request.kernel_slug=TRAIN.split('/')[1]
    train_version=client.kernels.kernels_api_client.get_kernel(request).metadata.current_version_number
   if not isinstance(train_version,int):raise RuntimeError('Missing train version provenance')
+  # Keep following the last actual run; a review-only save must not look like completed training.
+  previous_handle=previous.get('config',{}).get('kernel','')
+  if previous_handle.startswith(TRAIN+'/'):
+   train_version=int(previous_handle.rsplit('/',1)[1])
   asr=train_version<=1
   handle=f'{ASR}/{ASR_VERSION}' if asr else f'{TRAIN}/{train_version}'
   _,path=pull(handle,root/'active')
@@ -182,7 +195,7 @@ def main():
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
-  elif any(s in status for s in ['RUNNING','QUEUED']):state['status']='error' if 'OutOfMemoryError' in text or 'Traceback (most recent call last)' in text else 'running'
+  elif any(s in status for s in ['RUNNING','QUEUED']):state['status']='running'
   else:state['status']='unknown'
   publish_state(state)
   print(f'Synced {handle}: {state["status"]}; step {state["step"]}; {len(state["train"])} loss rows')
