@@ -20,6 +20,7 @@ def load():
   return json.loads((Path(__file__).resolve().parents[1]/'public/snapshot.json').read_text(encoding='utf-8-sig'))
 
 def publish(state):
+ state['events']=state.get('events',[])[-300:]
  current=state['config']['version'];history=state.setdefault('history',[])
  entry=next((r for r in history if r['version']==current),None)
  if entry is None:
