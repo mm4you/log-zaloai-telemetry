@@ -117,6 +117,11 @@ def events(text,stage,previous):
   if message not in seen:rows.append({'stage':stage,'message':message[:240],'level':level});seen.add(message)
  for line in text.splitlines():
   line=line.strip()
+  if line.startswith('GPU_PREFLIGHT '):
+   try:
+    d=json.loads(line.split(' ',1)[1]);add(f"GPU preflight · CUDA {d['cuda_build']} · {d['count']} GPU · {'sẵn sàng' if d['available'] else 'không khả dụng'}")
+   except (ValueError,KeyError):pass
+  if line.startswith('GPU_AFTER_INSTALL') and 'True' in line:add('Sau cài thư viện · CUDA vẫn khả dụng')
   if line.startswith('+ pip install'):add('Cài thư viện')
   if 'Fetching ' in line and 'files' in line:add('Tải model từ Hugging Face')
   p=re.search(r'(\d+)\s*/\s*(\d+)\s*\[([\d:]+)<',line)
@@ -187,7 +192,7 @@ def main():
    found=list(dest.rglob('ASR_SUMMARY.json'))
    if len(found)!=1 or json.loads(found[0].read_text()).get('smoke') is not False:raise RuntimeError('Full ASR summary missing; Qwen not launched')
    # Attach output only once it exists. Earlier quick-save cannot attach a running kernel.
-   meta['kernel_sources']=[ASR];meta['enable_gpu']=True;meta['enable_internet']=True
+   meta['kernel_sources']=[ASR];meta['enable_gpu']=True;meta['enable_internet']=True;meta['machine_shape']='NvidiaTeslaT4';meta.pop('docker_image',None)
    (train_path.parent/'kernel-metadata.json').write_text(json.dumps(meta),encoding='utf-8')
    result=cmd('kernels','push','-p',str(train_path.parent),'--accelerator','NvidiaTeslaT4')
    match=re.search(r'Kernel version (\d+)',result)
