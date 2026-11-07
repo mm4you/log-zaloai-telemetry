@@ -48,6 +48,9 @@ def stream(handle):
  return text
 
 def parse(state,text,asr):
+ # Kaggle replays the full log on every poll. Rebuild, never carry its last step into old records.
+ if not asr:
+  state.update(step=state['config']['parentStep'],hours=0,baseline=None,train=[],evaluations=[],agentEvaluations=[],phase='preparing')
  current=0;total=None
  for line in text.splitlines():
   progress=re.search(r'(\d+)\s*/\s*(\d+)\s*\[',line)
@@ -56,7 +59,9 @@ def parse(state,text,asr):
    state['step']=current
    if total:state['config']['targetStep']=total
    state['phase']='training'
-  parse_line(state,line)
+  if asr or not re.search(r"['\"]eval_loss['\"]\s*:",line):parse_line(state,line)
+  if not asr and line.strip().startswith('AGENT_EVAL_START:'):state['phase']='evaluating'
+  if not asr and line.strip().startswith('AGENT_EVAL:'):state['phase']='training'
  if not asr:
   agent=[]
   for m in re.finditer(r'AGENT_EVAL: (\{[^\n]+\})',text):
@@ -65,7 +70,11 @@ def parse(state,text,asr):
     if d.get('diagnostic_loss') is not None:row['diagnosticLoss']=float(d['diagnostic_loss'])
     agent.append(row)
    except (ValueError,KeyError,TypeError):pass
-  state['agentEvaluations']=list({r['step']:r for r in agent}.values())[-1000:]
+  state['agentEvaluations']=sorted({r['step']:r for r in agent}.values(),key=lambda r:r['step'])[-1000:]
+  for row in state['agentEvaluations']:
+   if 'diagnosticLoss' not in row:continue
+   if row['step']==state['config']['parentStep']:state['baseline']=row['diagnosticLoss']
+   else:state['evaluations'].append({'step':row['step'],'loss':row['diagnosticLoss']})
  if asr:
   logs=[]
   seen=set()
