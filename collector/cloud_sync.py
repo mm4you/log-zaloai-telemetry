@@ -38,7 +38,7 @@ def config(path,handle,asr):
  cfg=values['CONFIG'];t=cfg['training']
  declared=re.match(r'^(V\d+)\b',cfg.get('note',''))
  version=cfg.get('version') or (declared[1] if declared else 'V15')
- mode=values.get('RUN_MODE','train');benchmark=mode=='benchmark'
+ mode=values.get('RUN_MODE','train');benchmark=mode in ('benchmark','validate')
  parent=int(cfg['model'].get('parent_step') or 0)
  return dict(kernel=handle,version=version,runMode=mode,model=values['ASR']['id'] if asr else cfg['model']['id'],parentVersion=cfg['model'].get('parent_version'),parentStep=parent,targetStep=None if asr or benchmark else parent+t['max_additional_steps'],maxHours=None if asr or benchmark else t['max_train_hours'],evalEvery=None if asr or benchmark else t['eval_every'],evalOrigin=parent,saveEvery=None if asr or benchmark else t['save_every'],patience=None if asr or benchmark else t['early_stopping_patience'],probeLimit=None if asr else cfg['evaluation']['probe_samples'],loraRank=None if asr else t['lora_rank'],gpu=None,source='version-code',sourceHash=hashlib.sha256(path.read_bytes()).hexdigest())
 
@@ -54,9 +54,14 @@ def stream(handle):
 def parse(state,text,asr):
  # Kaggle replays the full log on every poll. Rebuild, never carry its last step into old records.
  if not asr:
-  state.update(step=state['config']['parentStep'],hours=0,baseline=None,train=[],evaluations=[],agentEvaluations=[],phase='preparing')
+  state.update(step=state['config']['parentStep'],hours=0,baseline=None,train=[],evaluations=[],agentEvaluations=[],phase='preparing',benchmarks=[])
  current=0;total=None
  for line in text.splitlines():
+  if not asr and line.strip().startswith('INFERENCE_BENCHMARK:'):
+   try:
+    d=ast.literal_eval(line.split(':',1)[1].strip())
+    state['benchmarks'].append(dict(profile=str(d['inference_profile'])[:60],samples=int(d['sample_count']),score30=float(d['agent_score_30s']),p50=d.get('latency_p50_seconds'),p95=d.get('latency_p95_seconds'),max=d.get('latency_max_seconds'),within20=d.get('within_target_20s'),over30=d.get('over_budget_30s'),asr=None,deadline=None))
+   except (ValueError,SyntaxError,KeyError,TypeError):pass
   progress=re.search(r'(\d+)\s*/\s*(\d+)\s*\[',line)
   if progress:current,total=map(int,progress.groups())
   if asr and re.search(r"['\"]loss['\"]\s*:",line):
