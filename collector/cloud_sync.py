@@ -1,6 +1,7 @@
 """One bounded cloud sync; no competition data or raw logs are published."""
 import ast,hashlib,json,os,re,shutil,subprocess,tempfile
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from collect import utc,parse_line
 from github_state import load as load_state,publish as publish_state
 
@@ -8,6 +9,7 @@ KAGGLE=shutil.which('kaggle') or str(Path.home()/'.local/bin/kaggle.exe')
 ASR='khangung/lifemate-v15-1-asr'
 TRAIN='khangung/lifemate-v15-2-train'
 ASR_VERSION=4
+SIDE='qminh7706/lifemate-v16-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
 def cmd(*args):
@@ -135,6 +137,11 @@ def events(text,stage,previous):
   if message not in seen:rows.append({'stage':stage,'message':message[:240],'level':level});seen.add(message)
  for line in text.splitlines():
   line=line.strip()
+  tagged=re.match(r'^\[([AB])\]\s*(.*)$',line)
+  tag=f'Run {tagged[1]} · ' if tagged else ''
+  if tagged:line=tagged[2]
+  for marker in ('PHASE ','ANALYZE shard','PREPARE','BATCH PROBE:','RUN DONE','TRANSCRIBE ','WINNER (dev','DECODE CHOICE','TEST vs','FINAL ASR:','ASR V16 DONE:'):
+   if line.startswith(marker):add(tag+line[:200])
   if line.startswith('INFERENCE_BENCHMARK:'):
    try:
     d=ast.literal_eval(line.split(':',1)[1].strip());add(f"Benchmark {d['inference_profile']} · {d['sample_count']} mẫu · điểm 30s {d['agent_score_30s']:.2f} · p50 {d['latency_p50_seconds']:.1f}s · p95 {d['latency_p95_seconds']:.1f}s")
@@ -181,7 +188,7 @@ def events(text,stage,previous):
    try:
     d=ast.literal_eval(line)
     for k in ['loss','eval_loss']:
-     if k in d:add(f'{k}: {float(d[k]):.6f}')
+     if k in d:add(f"{tag}{k}: {float(d[k]):.6f}" + (f" · epoch {d['epoch']}" if tag and 'epoch' in d else ''))
    except (ValueError,SyntaxError):pass
   if 'Saving model checkpoint' in line:
    m=re.search(r'checkpoint-(\d+)',line)
@@ -212,11 +219,18 @@ def main():
   _,path=pull(handle,root/'active')
   c=config(path,handle,asr)
   status=cmd('kernels','status',handle)
-  text=stream(handle)
+  side_text=''
+  with ThreadPoolExecutor(max_workers=1) as pool:
+   side_job=None if asr else pool.submit(stream,SIDE)
+   text=stream(handle)
+   if side_job:
+    try:side_text=side_job.result(timeout=60)
+    except Exception as error:print(f'Side log skipped: {type(error).__name__}',flush=True)
   same=previous['config']['kernel']==handle
   state=previous if same else dict(schema=2,config=c,updatedAt=utc(),source='kaggle',status='unknown',phase='preparing',step=0,hours=0,baseline=None,train=[],evaluations=[],references=[],history=previous.get('history',[]),events=previous.get('events',[]),asrLogs=previous.get('asrLogs',[]),agentEvaluations=previous.get('agentEvaluations',[]),**({'asr':previous['asr']} if 'asr' in previous else {}))
   state['config']=c
   state=parse(state,text,asr)
+  if side_text:state['events']=events(side_text,'ASR',state['events'])
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
