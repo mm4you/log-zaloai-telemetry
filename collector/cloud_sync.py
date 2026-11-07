@@ -36,7 +36,11 @@ def config(path,handle,asr):
   for target in node.targets:
    if isinstance(target,ast.Name):values[target.id]=value
  cfg=values['CONFIG'];t=cfg['training']
- return dict(kernel=handle,version='V15',model=values['ASR']['id'] if asr else cfg['model']['id'],parentVersion=None,parentStep=0,targetStep=None if asr else t['max_additional_steps'],maxHours=None if asr else t['max_train_hours'],evalEvery=None if asr else t['eval_every'],evalOrigin=0,saveEvery=None if asr else t['save_every'],patience=None if asr else t['early_stopping_patience'],probeLimit=None if asr else cfg['evaluation']['probe_samples'],loraRank=None if asr else t['lora_rank'],gpu=None,source='version-code',sourceHash=hashlib.sha256(path.read_bytes()).hexdigest())
+ declared=re.match(r'^(V\d+)\b',cfg.get('note',''))
+ version=cfg.get('version') or (declared[1] if declared else 'V15')
+ mode=values.get('RUN_MODE','train');benchmark=mode=='benchmark'
+ parent=int(cfg['model'].get('parent_step') or 0)
+ return dict(kernel=handle,version=version,runMode=mode,model=values['ASR']['id'] if asr else cfg['model']['id'],parentVersion=cfg['model'].get('parent_version'),parentStep=parent,targetStep=None if asr or benchmark else parent+t['max_additional_steps'],maxHours=None if asr or benchmark else t['max_train_hours'],evalEvery=None if asr or benchmark else t['eval_every'],evalOrigin=parent,saveEvery=None if asr or benchmark else t['save_every'],patience=None if asr or benchmark else t['early_stopping_patience'],probeLimit=None if asr else cfg['evaluation']['probe_samples'],loraRank=None if asr else t['lora_rank'],gpu=None,source='version-code',sourceHash=hashlib.sha256(path.read_bytes()).hexdigest())
 
 def stream(handle):
  p=subprocess.Popen([KAGGLE,'kernels','logs',handle,'--follow'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=dict(os.environ,PYTHONUNBUFFERED='1',PYTHONIOENCODING='utf-8'))
@@ -126,6 +130,11 @@ def events(text,stage,previous):
   if message not in seen:rows.append({'stage':stage,'message':message[:240],'level':level});seen.add(message)
  for line in text.splitlines():
   line=line.strip()
+  if line.startswith('INFERENCE_BENCHMARK:'):
+   try:
+    d=ast.literal_eval(line.split(':',1)[1].strip());add(f"Benchmark {d['inference_profile']} · {d['sample_count']} mẫu · điểm 30s {d['agent_score_30s']:.2f} · p50 {d['latency_p50_seconds']:.1f}s · p95 {d['latency_p95_seconds']:.1f}s")
+   except (ValueError,SyntaxError,KeyError):pass
+  if line.startswith('V16_PREFLIGHT:'):add('V16 · parent125 và split validation đã xác minh')
   if line.startswith('EVAL_SAMPLE '):
    try:
     d=json.loads(line.split(' ',1)[1]);add(f"Đánh giá {d['n']}/{d['total']} · replay tạm {d['avg']:.2f}% · {d['sec']:.1f}s")
