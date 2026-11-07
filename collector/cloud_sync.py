@@ -121,6 +121,8 @@ def events(text,stage,previous):
    try:
     d=json.loads(line.split(' ',1)[1]);add(f"Đánh giá {d['n']}/{d['total']} · replay tạm {d['avg']:.2f}% · {d['sec']:.1f}s")
    except (ValueError,KeyError):pass
+  if line.startswith('ATTENTION_PREFLIGHT_OK:'):add('Attention preflight đạt · forward khớp tham chiếu, backward hữu hạn')
+  if line.startswith('ATTENTION_BACKEND:'):add('T4 · memory-efficient SDPA · math fallback đã tắt')
   if line.startswith('MEMORY_SMOKE_START:'):add('Bắt đầu kiểm tra VRAM ở giới hạn context')
   if line.startswith('MEMORY_SMOKE_OK:'):
    try:
@@ -195,7 +197,9 @@ def main():
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
-  elif any(s in status for s in ['RUNNING','QUEUED']):state['status']='running'
+  elif any(s in status for s in ['RUNNING','QUEUED']):
+   state['status']='running'
+   if 'QUEUED' in status:state['events'].append({'stage':'ASR' if asr else 'Qwen','level':'info','message':'Kaggle đang xếp hàng cấp GPU; chưa thực thi model'})
   else:state['status']='unknown'
   publish_state(state)
   print(f'Synced {handle}: {state["status"]}; step {state["step"]}; {len(state["train"])} loss rows')
