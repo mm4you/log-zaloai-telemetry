@@ -199,6 +199,39 @@ def events(text,stage,previous):
   elif line.startswith('Traceback (most recent call last):'):add('Notebook ghi nhận lỗi · mở Kaggle để xem traceback','error')
  return rows[-300:]
 
+def peer_asr(text,handle,status):
+ """Headline numbers of another person's ASR notebook, read from its own log. Nothing here changes the pinned run."""
+ def num(v):
+  try:return float(v)
+  except (TypeError,ValueError):return None
+ out=dict(label='ASR · Minh',kernel=handle,status=status,stage=None,baseDevWer=None,baseTestWer=None,devWer=None,winner=None,testV16=None,testV15=None,final=None,loss={'A':None,'B':None},updatedAt=utc())
+ for raw in text.splitlines():
+  line=raw.strip();tag=re.match(r'^\[([AB])\]\s*(.*)$',line)
+  if tag:line=tag[2]
+  if line.startswith('PHASE '):out['stage']=line.split(':',1)[0][6:][:60]
+  elif line.startswith('PREPARE {'):
+   try:
+    d=json.loads(line[8:]);out['baseDevWer']=num(d.get('base_dev_wer'));out['baseTestWer']=num(d.get('base_test_wer'))
+   except ValueError:pass
+  elif line.startswith('WINNER (dev, strict WER):'):
+   m=re.match(r'WINNER \(dev, strict WER\): (\w+) (\{.*\})',line)
+   if m:
+    try:
+     dev=ast.literal_eval(m[2]);out['winner']=m[1];out['devWer']={k:num(v) for k,v in dev.items() if k in ('A','B')}
+    except (ValueError,SyntaxError):pass
+  elif line.startswith('TEST vs '):
+   try:
+    d=json.loads(line.split(' ',3)[3]);pick=lambda r:{k:num(r.get(k)) for k in ('wer','cer','exact_match')} if isinstance(r,dict) else None
+    out['testV16']=pick(d.get('v16'));out['testV15']=pick(next((v for k,v in d.items() if k!='v16'),None))
+   except (ValueError,IndexError):pass
+  elif line.startswith('FINAL ASR:'):out['final']=line.split(':',1)[1].strip()[:40]
+  elif tag and re.search(r"['\"]loss['\"]\s*:",line):
+   try:
+    d=ast.literal_eval(line);out['loss'][tag[1]]=num(d.get('loss'))
+   except (ValueError,SyntaxError):pass
+ if 'ASR V16 DONE' in text or 'ASR V17 DONE' in text:out['stage']='done'
+ return out
+
 def main():
  previous=load_state()
  with tempfile.TemporaryDirectory() as temp:
@@ -231,7 +264,12 @@ def main():
   state=previous if same else dict(schema=2,config=c,updatedAt=utc(),source='kaggle',status='unknown',phase='preparing',step=0,hours=0,baseline=None,train=[],evaluations=[],references=[],history=previous.get('history',[]),events=previous.get('events',[]),asrLogs=previous.get('asrLogs',[]),agentEvaluations=previous.get('agentEvaluations',[]),**({'asr':previous['asr']} if 'asr' in previous else {}))
   state['config']=c
   state=parse(state,text,asr)
-  if side.get(SIDE):state['events']=events(side[SIDE],'ASR',state['events'])
+  if side.get(SIDE):
+   state['events']=events(side[SIDE],'ASR',state['events'])
+   try:
+    st=cmd('kernels','status',SIDE)
+    state['peerAsr']=peer_asr(side[SIDE],SIDE,'complete' if 'COMPLETE' in st else 'error' if ('ERROR' in st or 'CANCEL' in st) else 'running' if ('RUNNING' in st or 'QUEUED' in st) else 'unknown')
+   except Exception as error:print(f'Peer ASR skipped: {type(error).__name__}',flush=True)
   if side.get(SIDE_TRAIN):
    # Rebuilt from the full log on every sync (the main events() call above dropped the previous Minh rows with the Qwen rows).
    state['events']+=[dict(r,stage='Qwen',message=('Minh · '+r['message'])[:240]) for r in events(side[SIDE_TRAIN],'Minh',[])[-40:]]
