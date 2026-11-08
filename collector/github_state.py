@@ -29,7 +29,7 @@ def publish(state):
  for row in history:
   if row['version']!=current and row.get('detail')=='Phiên đang xem':row['detail']='Phiên trước'
  # The producer only constructs numeric/config/event fields; raw logs never reach this function.
- allowed={'schema','config','asr','asrLogs','agentEvaluations','events','updatedAt','source','status','step','hours','baseline','phase','train','evaluations','references','history'}
+ allowed={'schema','config','asr','asrLogs','agentEvaluations','events','updatedAt','source','status','step','hours','baseline','phase','train','evaluations','references','history','benchmarks','peers','peerAsr'}
  payload={k:v for k,v in state.items() if k in allowed}
  raw=json.dumps(payload,ensure_ascii=False,allow_nan=False).encode()
  if len(raw)>200000:raise ValueError('Telemetry payload too large')
