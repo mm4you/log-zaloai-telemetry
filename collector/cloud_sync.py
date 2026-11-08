@@ -232,6 +232,39 @@ def peer_asr(text,handle,status):
  if 'ASR V16 DONE' in text or 'ASR V17 DONE' in text:out['stage']='done'
  return out
 
+def peer_train(text,handle,status):
+ """Loss series of another person's training notebook, read only from its own log; the pinned run is never touched."""
+ ver=re.search(r'-v(\d+)-',handle)
+ out=dict(label='Train · Minh',kernel=handle,version=f'V{ver[1]}' if ver else 'V16',status=status,phase='preparing',step=0,targetStep=None,hours=0.0,evalEvery=None,train=[],evaluations=[],baseline=None,evalProgress=None,stopped=None,updatedAt=utc())
+ points={};evals={};cur=0
+ for raw in text.splitlines():
+  line=raw.strip()
+  m=re.match(r'^TRAIN PROGRESS: global=(\d+) new=(\d+)/(\d+) hours=([\d.]+)',line)
+  if m:
+   cur=int(m[1]);out.update(step=cur,targetStep=cur-int(m[2])+int(m[3]),hours=float(m[4]),phase='training')
+  elif line.startswith('{') and re.search(r"['\"]loss['\"]\s*:",line) and cur:
+   try:
+    d=ast.literal_eval(line);points[cur]=float(d['loss'])
+   except (ValueError,SyntaxError,KeyError,TypeError):pass
+  elif line.startswith('VAL_LOSS:'):
+   try:
+    d=json.loads(line.split(':',1)[1]);evals[int(d['step'])]=float(d['val_loss'])
+   except (ValueError,KeyError,TypeError):pass
+  elif line.startswith('EARLY STOP') or line.startswith('LONG RUN COMPLETE') or line.startswith('TRAIN DONE'):
+   out.update(phase='finished',stopped=line[:100])
+  else:
+   t=re.match(r'^\[([\w.-]{1,40})\]\s*EVAL_SAMPLE (\{.*\})',line)
+   if t:
+    try:
+     d=json.loads(t[2]);out['evalProgress']=dict(name=t[1],n=int(d['n']),total=int(d['total']),avg=float(d['avg']))
+    except (ValueError,KeyError,TypeError):pass
+ if 'PHASE train' in text and out['phase']=='training':out['phase']='finished'
+ out['train']=[dict(step=s,loss=l) for s,l in sorted(points.items())][-600:]
+ ev=sorted(evals.items())
+ out['evaluations']=[dict(step=s,loss=l) for s,l in ev][-100:]
+ if len(ev)>1:out['evalEvery']=max(1,min(b[0]-a[0] for a,b in zip(ev,ev[1:])))
+ return out
+
 def main():
  previous=load_state()
  with tempfile.TemporaryDirectory() as temp:
@@ -274,6 +307,16 @@ def main():
    # Rebuilt from the full log on every sync (the main events() call above dropped the previous Minh rows with the Qwen rows).
    state['events']+=[dict(r,stage='Qwen',message=('Minh · '+r['message'])[:240]) for r in events(side[SIDE_TRAIN],'Minh',[])[-40:]]
    state['events']=state['events'][-300:]
+   try:
+    from kaggle.api.kaggle_api_extended import KaggleApi as _Api
+    from kagglesdk.kernels.types.kernels_api_service import ApiGetKernelRequest as _Req
+    _api=_Api();_api.authenticate()
+    with _api.build_kaggle_client() as _client:
+     _r=_Req();_r.user_name,_r.kernel_slug=SIDE_TRAIN.split('/')
+     number=_client.kernels.kernels_api_client.get_kernel(_r).metadata.current_version_number
+    _st=cmd('kernels','status',SIDE_TRAIN)
+    state['peers']=[peer_train(side[SIDE_TRAIN],f'{SIDE_TRAIN}/{number}','complete' if 'COMPLETE' in _st else 'error' if ('ERROR' in _st or 'CANCEL' in _st) else 'running' if ('RUNNING' in _st or 'QUEUED' in _st) else 'unknown')]
+   except Exception as error:print(f'Peer train skipped: {type(error).__name__}',flush=True)
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
