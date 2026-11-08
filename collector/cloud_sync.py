@@ -10,6 +10,7 @@ ASR='khangung/lifemate-v15-1-asr'
 TRAIN='khangung/lifemate-v15-2-train'
 ASR_VERSION=4
 SIDE='qminh7706/lifemate-v16-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
+SIDE_TRAIN='qminh7706/lifemate-v16-2-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
 def cmd(*args):
@@ -219,18 +220,22 @@ def main():
   _,path=pull(handle,root/'active')
   c=config(path,handle,asr)
   status=cmd('kernels','status',handle)
-  side_text=''
-  with ThreadPoolExecutor(max_workers=1) as pool:
-   side_job=None if asr else pool.submit(stream,SIDE)
+  side={}
+  with ThreadPoolExecutor(max_workers=2) as pool:
+   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN)}
    text=stream(handle)
-   if side_job:
-    try:side_text=side_job.result(timeout=60)
+   for h,job in jobs.items():
+    try:side[h]=job.result(timeout=60)
     except Exception as error:print(f'Side log skipped: {type(error).__name__}',flush=True)
   same=previous['config']['kernel']==handle
   state=previous if same else dict(schema=2,config=c,updatedAt=utc(),source='kaggle',status='unknown',phase='preparing',step=0,hours=0,baseline=None,train=[],evaluations=[],references=[],history=previous.get('history',[]),events=previous.get('events',[]),asrLogs=previous.get('asrLogs',[]),agentEvaluations=previous.get('agentEvaluations',[]),**({'asr':previous['asr']} if 'asr' in previous else {}))
   state['config']=c
   state=parse(state,text,asr)
-  if side_text:state['events']=events(side_text,'ASR',state['events'])
+  if side.get(SIDE):state['events']=events(side[SIDE],'ASR',state['events'])
+  if side.get(SIDE_TRAIN):
+   # Rebuilt from the full log on every sync (the main events() call above dropped the previous Minh rows with the Qwen rows).
+   state['events']+=[dict(r,stage='Qwen',message=('Minh · '+r['message'])[:240]) for r in events(side[SIDE_TRAIN],'Minh',[])[-40:]]
+   state['events']=state['events'][-300:]
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
