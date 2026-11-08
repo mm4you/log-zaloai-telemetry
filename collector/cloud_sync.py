@@ -9,7 +9,7 @@ KAGGLE=shutil.which('kaggle') or str(Path.home()/'.local/bin/kaggle.exe')
 ASR='khangung/lifemate-v15-1-asr'
 TRAIN='khangung/lifemate-v15-2-train'
 ASR_VERSION=4
-SIDE='qminh7706/lifemate-v16-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
+SIDE='qminh7706/lifemate-v17-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
 SIDE_TRAIN='qminh7706/lifemate-v16-2-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
