@@ -372,6 +372,27 @@ def main():
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
+    try:
+     # Duy's eval notebook in the Log notebook feed: milestones only (every 25th sample) plus every sample that hit the 30 s deadline.
+     _evx=[];_seenx=set()
+     for _l in (side.get(DUY_EVAL) or '').splitlines():
+      _s=_l.strip()
+      _m=re.match(r'^(?:\[[\w.-]{1,40}\]\s*)?EVAL_SAMPLE (\{.*\})',_s)
+      if _m:
+       _d=json.loads(_m[1]);_n=int(_d['n'])
+       if ('c',_n) in _seenx:continue
+       _seenx.add(('c',_n))
+       if _n%25==0 or _n==int(_d['total']):_evx.append({'stage':'Qwen','level':'info','message':f"Duy · Chấm 307 · mẫu {_n}/{_d['total']} · điểm tạm {float(_d['avg']):.2f}"})
+       continue
+      _m=re.match(r'^INFER_SAMPLE (\{.*\})',_s)
+      if _m:
+       _d=json.loads(_m[1]);_n=int(_d['n'])
+       if ('p',_n) in _seenx:continue
+       _seenx.add(('p',_n))
+       if _d.get('err') or _d.get('over30'):_evx.append({'stage':'Qwen','level':'error','message':f"Duy · Public · #{_n} {_d['id']} quá 30 giây ({float(_d['sec']):.1f}s)"})
+       elif _n%25==0:_evx.append({'stage':'Qwen','level':'info','message':f"Duy · Public · mẫu {_n}/{_d['total']} · {float(_d['sec']):.1f} giây"})
+     state['events']+=_evx[-40:]
+    except Exception as error:print(f'Duy eval events skipped: {type(error).__name__}',flush=True)
     state['events']=state['events'][-300:]
    except Exception as error:print(f'Peer train (Duy) skipped: {type(error).__name__}',flush=True)
   state.update(updatedAt=utc(),source='kaggle')
