@@ -9,7 +9,9 @@ if __name__=='__main__':
   started=time.monotonic()
   try:
    state=main()
-   if state and (state['status']=='error' or (state['status']=='complete' and '/lifemate-v15-2-train/' in state['config']['kernel'])):
+   # Keep watching while another person's training notebook (peer panel) is still running; stop only when nothing is live.
+   peer_live=any(p.get('status')=='running' for p in (state or {}).get('peers',[]))
+   if state and not peer_live and (state['status']=='error' or (state['status']=='complete' and '/lifemate-v15-2-train/' in state['config']['kernel'])):
     marker=Path('.local-state/monitor-terminal');marker.parent.mkdir(exist_ok=True);marker.write_text(state['status']);break
   except Exception as error:
    print(f'Cloud sync retry pending: {type(error).__name__}',flush=True)
