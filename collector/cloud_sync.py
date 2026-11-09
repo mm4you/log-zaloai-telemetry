@@ -355,6 +355,20 @@ def main():
       _name='307 · Duy' if _tot<=400 else 'public · Duy'
       duy['evalProgress']=dict(name=_name,n=int(_last['n']),total=_tot,avg=float(_last['avg']))
       duy['evalLive']=dict(name=_name,status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_all),total=_tot,avg=float(_last['avg']),stateOk=sum(1 for r in _all if r.get('state') is True),within20=sum(1 for s in _secs if s<=20),over30=sum(1 for s in _secs if s>=30),meanSec=_mean,etaSeconds=max(0,(_tot-len(_all))*_mean),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=float(r['score']),calls=len(r.get('pred') or [])) for r in _all[-700:]])
+     # Public 634 phase of the same notebook (INFER_SAMPLE lines): no gold, so only latency/errors; the finished 307 result stays attached as final307.
+     _pub={}
+     for _l in (side.get(DUY_EVAL) or '').splitlines():
+      _m=re.match(r'^INFER_SAMPLE (\{.*\})',_l.strip())
+      if _m:
+       _d=json.loads(_m[1]);_pub[int(_d['n'])]=_d
+     if _pub:
+      _se=cmd('kernels','status',DUY_EVAL)
+      _pa=[_pub[k] for k in sorted(_pub)];_pt=int(_pa[-1]['total']);_ps=[float(r['sec']) for r in _pa];_pm=sum(_ps)/len(_ps)
+      _prev=duy.get('evalLive')
+      _f307=None
+      if _prev and _prev.get('total',0)<=400:_f307={k:v for k,v in _prev.items() if k!='recent'}
+      duy['evalLive']=dict(name='public · Duy',kind='public',status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_pa),total=_pt,avg=(_f307['avg'] if _f307 else 0.0),stateOk=sum(1 for r in _pa if r.get('stopped') is True),within20=sum(1 for s in _ps if s<=20),over30=sum(1 for r in _pa if r.get('over30') or float(r['sec'])>=30),meanSec=_pm,etaSeconds=max(0,(_pt-len(_pa))*_pm),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=-1.0 if not r.get('err') else -2.0,calls=len(r.get('pred') or [])) for r in _pa[-700:]],**({'final307':_f307} if _f307 else {}))
+      duy['evalProgress']=dict(name='public · Duy',n=len(_pa),total=_pt,avg=_pm)
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
