@@ -342,6 +342,8 @@ def main():
     _sd=cmd('kernels','status',DUY_TRAIN)
     duy=peer_train(side[DUY_TRAIN],f'{DUY_TRAIN}/{numberD}','complete' if 'COMPLETE' in _sd else 'error' if ('ERROR' in _sd or 'CANCEL' in _sd) else 'running' if ('RUNNING' in _sd or 'QUEUED' in _sd) else 'unknown','Train · Duy')
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
+    state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
+    state['events']=state['events'][-300:]
    except Exception as error:print(f'Peer train (Duy) skipped: {type(error).__name__}',flush=True)
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
