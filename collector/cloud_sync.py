@@ -367,7 +367,7 @@ def main():
       _prev=duy.get('evalLive')
       _f307=None
       if _prev and _prev.get('total',0)<=400:_f307={k:v for k,v in _prev.items() if k!='recent'}
-      duy['evalLive']=dict(name='public · Duy',kind='public',status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_pa),total=_pt,avg=(_f307['avg'] if _f307 else 0.0),stateOk=sum(1 for r in _pa if r.get('stopped') is True),within20=sum(1 for s in _ps if s<=20),over30=sum(1 for r in _pa if r.get('over30') or float(r['sec'])>=30),meanSec=_pm,etaSeconds=max(0,(_pt-len(_pa))*_pm),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=-1.0 if not r.get('err') else -2.0,calls=len(r.get('pred') or [])) for r in _pa[-700:]],**({'final307':_f307} if _f307 else {}))
+      duy['evalLive']=dict(name='public · Duy',kind='public',status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_pa),total=_pt,avg=(_f307['avg'] if _f307 else 0.0),stateOk=sum(1 for r in _pa if r.get('stopped') is True),within20=sum(1 for s in _ps if s<=20),over30=sum(1 for r in _pa if r.get('over30') or float(r['sec'])>=30),meanSec=_pm,lastN=int(_pa[-1]['n']),etaSeconds=max(0,(_pt-int(_pa[-1]['n']))*_pm),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=-1.0 if not r.get('err') else -2.0,calls=len(r.get('pred') or [])) for r in _pa[-700:]],**({'final307':_f307} if _f307 else {}))
       duy['evalProgress']=dict(name='public · Duy',n=len(_pa),total=_pt,avg=_pm)
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
