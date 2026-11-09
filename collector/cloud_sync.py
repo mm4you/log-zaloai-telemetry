@@ -344,14 +344,17 @@ def main():
     duy=peer_train(side[DUY_TRAIN],f'{DUY_TRAIN}/{numberD}','complete' if 'COMPLETE' in _sd else 'error' if ('ERROR' in _sd or 'CANCEL' in _sd) else 'running' if ('RUNNING' in _sd or 'QUEUED' in _sd) else 'unknown','Train · Duy')
     try:
      # Duy's eval notebook: last EVAL_SAMPLE line = live 307 progress (score avg so far); only shown while that run is live or just finished.
-     _last=None
+     _rows={}
      for _l in (side.get(DUY_EVAL) or '').splitlines():
       _m=re.match(r'^(?:\[[\w.-]{1,40}\]\s*)?EVAL_SAMPLE (\{.*\})',_l.strip())
-      if _m:_last=json.loads(_m[1])
-     if _last:
+      if _m:
+       _d=json.loads(_m[1]);_rows[int(_d['n'])]=_d
+     if _rows:
       _se=cmd('kernels','status',DUY_EVAL)
-      duy['evalProgress']=dict(name='307 · Duy' if int(_last['total'])<=400 else 'public · Duy',n=int(_last['n']),total=int(_last['total']),avg=float(_last['avg']))
-      duy['evalStatus']='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running'
+      _all=[_rows[k] for k in sorted(_rows)];_last=_all[-1];_tot=int(_last['total']);_secs=[float(r['sec']) for r in _all];_mean=sum(_secs)/len(_secs)
+      _name='307 · Duy' if _tot<=400 else 'public · Duy'
+      duy['evalProgress']=dict(name=_name,n=int(_last['n']),total=_tot,avg=float(_last['avg']))
+      duy['evalLive']=dict(name=_name,status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_all),total=_tot,avg=float(_last['avg']),stateOk=sum(1 for r in _all if r.get('state') is True),within20=sum(1 for s in _secs if s<=20),over30=sum(1 for s in _secs if s>=30),meanSec=_mean,etaSeconds=max(0,(_tot-len(_all))*_mean),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=float(r['score']),calls=len(r.get('pred') or [])) for r in _all[-10:]])
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
