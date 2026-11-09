@@ -354,7 +354,7 @@ def main():
       _all=[_rows[k] for k in sorted(_rows)];_last=_all[-1];_tot=int(_last['total']);_secs=[float(r['sec']) for r in _all];_mean=sum(_secs)/len(_secs)
       _name='307 · Duy' if _tot<=400 else 'public · Duy'
       duy['evalProgress']=dict(name=_name,n=int(_last['n']),total=_tot,avg=float(_last['avg']))
-      duy['evalLive']=dict(name=_name,status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_all),total=_tot,avg=float(_last['avg']),stateOk=sum(1 for r in _all if r.get('state') is True),within20=sum(1 for s in _secs if s<=20),over30=sum(1 for s in _secs if s>=30),meanSec=_mean,etaSeconds=max(0,(_tot-len(_all))*_mean),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=float(r['score']),calls=len(r.get('pred') or [])) for r in _all[-10:]])
+      duy['evalLive']=dict(name=_name,status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_all),total=_tot,avg=float(_last['avg']),stateOk=sum(1 for r in _all if r.get('state') is True),within20=sum(1 for s in _secs if s<=20),over30=sum(1 for s in _secs if s>=30),meanSec=_mean,etaSeconds=max(0,(_tot-len(_all))*_mean),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=float(r['score']),calls=len(r.get('pred') or [])) for r in _all[-700:]])
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
