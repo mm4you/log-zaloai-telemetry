@@ -239,17 +239,20 @@ def peer_train(text,handle,status,label='Train · Minh'):
  """Loss series of another person's training notebook, read only from its own log; the pinned run is never touched."""
  ver=re.search(r'-v(\d+)-',handle)
  out=dict(label=label,kernel=handle,version=f'V{ver[1]}' if ver else 'V16',status=status,phase='preparing',step=0,targetStep=None,hours=0.0,evalEvery=None,train=[],evaluations=[],baseline=None,evalProgress=None,stopped=None,updatedAt=utc())
- points={};evals={};agents={};cur=0
+ points={};evals={};agents={};cur=0;base=None;unit=None
  for raw in text.splitlines():
   line=raw.strip()
   m=re.match(r'^(?:LONG RUN|TRAIN) PROGRESS: global=(\d+),? new=(\d+)/(\d+),? hours=([\d.]+)',line)
   if m:
    cur=int(m[1]);out.update(step=cur,targetStep=cur-int(m[2])+int(m[3]),hours=float(m[4]),phase='training')
+  elif line.startswith('HEARTBEAT phase=train'):
+   h=re.search(r'session_h=([\d.]+)',line)
+   if h and base is not None:out['hours']=max(out['hours'],float(h[1]))
   elif line.startswith('TRAIN STEP '):
    # Khang's notebook: "TRAIN STEP 5/75 (global 305) | loss 0.0141 | lr ... | grad_norm ... | 0.37 h elapsed"
    s=re.match(r'^TRAIN STEP (\d+)/(\d+) \(global (\d+)\) \| loss (\S+) \|.*?([\d.]+) h elapsed',line)
    if s:
-    cur=int(s[3]);out.update(step=cur,targetStep=cur-int(s[1])+int(s[2]),hours=float(s[5]),phase='training')
+    cur=int(s[3]);base=cur-int(s[1]);out.update(step=cur,targetStep=base+int(s[2]),hours=float(s[5]),phase='training')
     try:
      v=float(s[4])
      if v==v:points[cur]=v   # skip nan
@@ -262,7 +265,14 @@ def peer_train(text,handle,status,label='Train · Minh'):
    except (ValueError,KeyError,TypeError):pass
   elif line.startswith('{') and re.search(r"['\"]loss['\"]\s*:",line) and cur:
    try:
-    d=ast.literal_eval(line);points[cur]=float(d['loss'])
+    d=ast.literal_eval(line)
+    if base is not None and 'epoch' in d:
+     ep=float(d['epoch'])
+     if unit is None and ep>0:unit=ep
+     k=round(ep/unit) if unit else 0
+     if k>=1:
+      cur=base+k;points[cur]=float(d['loss']);out.update(step=max(out['step'],cur),phase='training')
+    else:points[cur]=float(d['loss'])
    except (ValueError,SyntaxError,KeyError,TypeError):pass
   elif line.startswith('VAL_LOSS:'):
    try:
@@ -277,7 +287,7 @@ def peer_train(text,handle,status,label='Train · Minh'):
      d=json.loads(t[2]);out['evalProgress']=dict(name=t[1],n=int(d['n']),total=int(d['total']),avg=float(d['avg']))
     except (ValueError,KeyError,TypeError):pass
  if 'PHASE train' in text and out['phase']=='training':out['phase']='finished'
- out['train']=[dict(step=s,loss=l) for s,l in sorted(points.items())][-600:]
+ out['train']=[dict(step=s,loss=l) for s,l in sorted(points.items()) if l==l][-600:]
  ev=sorted(evals.items())
  out['evaluations']=[dict(step=s,loss=l) for s,l in ev][-100:]
  if len(ev)>1:out['evalEvery']=max(1,min(b[0]-a[0] for a,b in zip(ev,ev[1:])))
