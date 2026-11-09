@@ -11,6 +11,7 @@ TRAIN='khangung/lifemate-v15-2-train'
 ASR_VERSION=4
 SIDE='qminh7706/lifemate-v17-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
 SIDE_TRAIN='qminh7706/lifemate-v16-2-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
+DUY_TRAIN='castoraletheia/lifemate-v17-train'  # log-only: Duy's training run, shown as a "Train · Duy" peer panel
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
 def cmd(*args):
@@ -232,16 +233,22 @@ def peer_asr(text,handle,status):
  if 'ASR V16 DONE' in text or 'ASR V17 DONE' in text:out['stage']='done'
  return out
 
-def peer_train(text,handle,status):
+def peer_train(text,handle,status,label='Train · Minh'):
  """Loss series of another person's training notebook, read only from its own log; the pinned run is never touched."""
  ver=re.search(r'-v(\d+)-',handle)
- out=dict(label='Train · Minh',kernel=handle,version=f'V{ver[1]}' if ver else 'V16',status=status,phase='preparing',step=0,targetStep=None,hours=0.0,evalEvery=None,train=[],evaluations=[],baseline=None,evalProgress=None,stopped=None,updatedAt=utc())
- points={};evals={};cur=0
+ out=dict(label=label,kernel=handle,version=f'V{ver[1]}' if ver else 'V16',status=status,phase='preparing',step=0,targetStep=None,hours=0.0,evalEvery=None,train=[],evaluations=[],baseline=None,evalProgress=None,stopped=None,updatedAt=utc())
+ points={};evals={};agents={};cur=0
  for raw in text.splitlines():
   line=raw.strip()
-  m=re.match(r'^TRAIN PROGRESS: global=(\d+) new=(\d+)/(\d+) hours=([\d.]+)',line)
+  m=re.match(r'^(?:LONG RUN|TRAIN) PROGRESS: global=(\d+),? new=(\d+)/(\d+),? hours=([\d.]+)',line)
   if m:
    cur=int(m[1]);out.update(step=cur,targetStep=cur-int(m[2])+int(m[3]),hours=float(m[4]),phase='training')
+  elif label.endswith('Duy') and line.startswith('AGENT_EVAL:'):
+   # Duy's notebook logs the held-out probe as AGENT_EVAL {step, diagnostic_loss, ...}; the baseline probe (first line) is the starting loss.
+   try:
+    d=json.loads(line.split(':',1)[1]);evals[int(d['step'])]=float(d['diagnostic_loss'])
+    agents[int(d['step'])]=dict(step=int(d['step']),agentScore=float(d['agent_score_30s']),stateMatch=float(d['state_match_rate']),toolF1=float(d['tool_f1']),diagnosticLoss=float(d['diagnostic_loss']))
+   except (ValueError,KeyError,TypeError):pass
   elif line.startswith('{') and re.search(r"['\"]loss['\"]\s*:",line) and cur:
    try:
     d=ast.literal_eval(line);points[cur]=float(d['loss'])
@@ -263,6 +270,12 @@ def peer_train(text,handle,status):
  ev=sorted(evals.items())
  out['evaluations']=[dict(step=s,loss=l) for s,l in ev][-100:]
  if len(ev)>1:out['evalEvery']=max(1,min(b[0]-a[0] for a,b in zip(ev,ev[1:])))
+ if agents:
+  rows=[];best=None
+  for s,a in sorted(agents.items()):
+   rows.append(dict(a,improved=best is not None and a['agentScore']>best))
+   best=a['agentScore'] if best is None else max(best,a['agentScore'])
+  out['agent']=rows[-100:]
  return out
 
 def main():
@@ -288,7 +301,7 @@ def main():
   status=cmd('kernels','status',handle)
   side={}
   with ThreadPoolExecutor(max_workers=2) as pool:
-   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN)}
+   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN)}
    text=stream(handle)
    for h,job in jobs.items():
     try:side[h]=job.result(timeout=60)
@@ -317,6 +330,19 @@ def main():
     _st=cmd('kernels','status',SIDE_TRAIN)
     state['peers']=[peer_train(side[SIDE_TRAIN],f'{SIDE_TRAIN}/{number}','complete' if 'COMPLETE' in _st else 'error' if ('ERROR' in _st or 'CANCEL' in _st) else 'running' if ('RUNNING' in _st or 'QUEUED' in _st) else 'unknown')]
    except Exception as error:print(f'Peer train skipped: {type(error).__name__}',flush=True)
+  if side.get(DUY_TRAIN):
+   # Duy's run: its own panel only (no Minh-style event rows). Kept after Minh's panel; a failure here never touches the pinned run.
+   try:
+    from kaggle.api.kaggle_api_extended import KaggleApi as _ApiD
+    from kagglesdk.kernels.types.kernels_api_service import ApiGetKernelRequest as _ReqD
+    _apiD=_ApiD();_apiD.authenticate()
+    with _apiD.build_kaggle_client() as _clientD:
+     _rd=_ReqD();_rd.user_name,_rd.kernel_slug=DUY_TRAIN.split('/')
+     numberD=_clientD.kernels.kernels_api_client.get_kernel(_rd).metadata.current_version_number
+    _sd=cmd('kernels','status',DUY_TRAIN)
+    duy=peer_train(side[DUY_TRAIN],f'{DUY_TRAIN}/{numberD}','complete' if 'COMPLETE' in _sd else 'error' if ('ERROR' in _sd or 'CANCEL' in _sd) else 'running' if ('RUNNING' in _sd or 'QUEUED' in _sd) else 'unknown','Train · Duy')
+    state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
+   except Exception as error:print(f'Peer train (Duy) skipped: {type(error).__name__}',flush=True)
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
