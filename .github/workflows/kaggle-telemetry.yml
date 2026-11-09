@@ -6,6 +6,11 @@ on:
         description: Worker duration (seconds)
         required: false
         default: '3300'
+  push:
+    branches: [main]
+    paths:
+      - 'collector/**'
+      - '.github/workflows/kaggle-telemetry.yml'
   schedule:
     - cron: '7,37 * * * *'
 permissions:
