@@ -13,6 +13,7 @@ SIDE='qminh7706/lifemate-v17-1-asr'  # log-only: its lines fill the ASR rows of 
 SIDE_TRAIN='qminh7706/lifemate-v16-2-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
 DUY_EVAL='castoraletheia/lifemate-v17-eval-307-public-634'  # log-only: Duy's 307 + public eval, shown inside Duy's panel as eval progress
 DUY_TRAIN='castoraletheia/lifemate-v17-train'  # log-only: Duy's training run, shown as a "Train · Duy" peer panel
+KHANG_TRAIN='khangung/lifemate-v17-3-train-syn'  # log-only: Khang's train-only run (step 300 + synthetic rows), shown as a "Train · Khang" peer panel
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
 def cmd(*args):
@@ -244,6 +245,15 @@ def peer_train(text,handle,status,label='Train · Minh'):
   m=re.match(r'^(?:LONG RUN|TRAIN) PROGRESS: global=(\d+),? new=(\d+)/(\d+),? hours=([\d.]+)',line)
   if m:
    cur=int(m[1]);out.update(step=cur,targetStep=cur-int(m[2])+int(m[3]),hours=float(m[4]),phase='training')
+  elif line.startswith('TRAIN STEP '):
+   # Khang's notebook: "TRAIN STEP 5/75 (global 305) | loss 0.0141 | lr ... | grad_norm ... | 0.37 h elapsed"
+   s=re.match(r'^TRAIN STEP (\d+)/(\d+) \(global (\d+)\) \| loss (\S+) \|.*?([\d.]+) h elapsed',line)
+   if s:
+    cur=int(s[3]);out.update(step=cur,targetStep=cur-int(s[1])+int(s[2]),hours=float(s[5]),phase='training')
+    try:
+     v=float(s[4])
+     if v==v:points[cur]=v   # skip nan
+    except ValueError:pass
   elif label.endswith('Duy') and line.startswith('AGENT_EVAL:'):
    # Duy's notebook logs the held-out probe as AGENT_EVAL {step, diagnostic_loss, ...}; the baseline probe (first line) is the starting loss.
    try:
@@ -258,7 +268,7 @@ def peer_train(text,handle,status,label='Train · Minh'):
    try:
     d=json.loads(line.split(':',1)[1]);evals[int(d['step'])]=float(d['val_loss'])
    except (ValueError,KeyError,TypeError):pass
-  elif line.startswith('EARLY STOP') or line.startswith('LONG RUN COMPLETE') or line.startswith('TRAIN DONE'):
+  elif line.startswith('EARLY STOP') or line.startswith('LONG RUN COMPLETE') or line.startswith('TRAIN DONE') or line.startswith('TRAIN_ONLY:'):
    out.update(phase='finished',stopped=line[:100])
   else:
    t=re.match(r'^\[([\w.-]{1,40})\]\s*EVAL_SAMPLE (\{.*\})',line)
@@ -278,6 +288,67 @@ def peer_train(text,handle,status,label='Train · Minh'):
    best=a['agentScore'] if best is None else max(best,a['agentScore'])
   out['agent']=rows[-100:]
  return out
+
+def khang_detail(text):
+ """Facts, phase checklist, warnings and per-step series of Khang's train-only notebook, read only from its own log."""
+ facts=[];phases=[];step_sec=[];gpu=[];warn=[]
+ def add(k,v):facts.append(dict(k=k[:40],v=str(v)[:200]))
+ g=re.search(r"^GPU: \[(.*?)\]",text,re.M)
+ if g:add('GPU',g[1].replace("'",''))
+ m=re.search(r'^PARENT: (.*?) \| step (\d+) \| sha256 (\w{8})',text,re.M)
+ if m:add('Điểm xuất phát',f'{m[1][:70]} · bước {m[2]} · sha256 {m[3]}…')
+ m=re.search(r'^PLAN \(Kaggle.*?train (\d+) steps.*?LR (\S+?), \+(\d+) synthetic',text,re.M)
+ if m:add('Số bước · LR · mẫu tổng hợp',f'{m[1]} bước · LR {m[2]} · +{m[3]} mẫu')
+ m=re.search(r'^ASR MIX (\{.*\})',text,re.M)
+ if m:
+  try:a=ast.literal_eval(m[1]);add('Trộn ASR',f"{a['selected_asr']}/{a['approved']} mẫu dùng ASR · {a['rows']} dòng")
+  except (ValueError,SyntaxError,KeyError):pass
+ m=re.search(r'^OVERSAMPLE (\{.*\})',text,re.M)
+ if m:
+  try:a=ast.literal_eval(m[1]);add('Tăng mẫu nhóm yếu',f"{a['weak_episodes']} mẫu yếu · {a['rows_before']} → {a['rows_after']} dòng")
+  except (ValueError,SyntaxError,KeyError):pass
+ m=re.search(r'^SYNTH_MIX (\{.*\})',text,re.M)
+ if m:
+  try:a=json.loads(m[1]);add('Nối dữ liệu tổng hợp',f"{a['rows']} dòng · bỏ {a['dropped_too_long']} quá dài · {a['file']}")
+  except (ValueError,KeyError):pass
+ m=re.search(r"'seq_max': (\d+)",text)
+ if m:add('Token dài nhất (giới hạn 9216)',m[1])
+ m=re.search(r'^TRAIN_DATA: (\{.*\})',text,re.M)
+ if m:
+  try:a=json.loads(m[1]);add('Dữ liệu train',f"{a['rows']} dòng · batch hiệu dụng {a['effective_batch']} · {a['valid_episodes']} mẫu validation")
+  except (ValueError,KeyError):pass
+ m=re.search(r'^PHASE setup: ([\d.]+) min',text,re.M)
+ if m:add('Chuẩn bị mất',f'{m[1]} phút')
+ evals=[]
+ for m in re.finditer(r'^VAL_LOSS: (\{.*\})',text,re.M):
+  try:evals.append(json.loads(m[1]))
+  except ValueError:pass
+ if evals:
+  add('Thời gian đo val loss',f"{evals[-1].get('eval_seconds',0):.0f} giây mỗi lần (2×T4)")
+  if len(evals)>1 and evals[-1]['step']>evals[0]['step'] and evals[-1]['val_loss']==evals[0]['val_loss']:
+   warn.append('Val loss không đổi so với điểm xuất phát: nếu đang ở bước ≥ 25 thì model có thể chưa học (lr=0 hoặc bước bị bỏ qua).')
+ steps=[];nan=0;last_eta=None
+ for m in re.finditer(r'^TRAIN STEP (\d+)/(\d+) \(global (\d+)\) \| loss (\S+) \| lr (\S+) \| grad_norm (\S+) \| ([\d.]+) h elapsed \| ETA ([\d.]+) h',text,re.M):
+  steps.append((int(m[3]),float(m[7])));last_eta=float(m[8])
+  if m[6]=='nan':nan+=1
+ for (s0,h0),(s1,h1) in zip(steps,steps[1:]):
+  if s1>s0:step_sec.append(dict(step=s1,sec=round((h1-h0)*3600/(s1-s0),1)))
+ if steps:
+  add('Bước mới nhất',f'{steps[-1][0]} · {steps[-1][1]:.2f} giờ'+(f' · còn khoảng {last_eta:.1f} giờ' if last_eta is not None else ''))
+ if nan:warn.append(f'grad_norm = NaN ở {nan} bước train (fp16 có thể bỏ qua vài bước đầu; theo dõi val loss ở bước 25).')
+ for m in re.finditer(r'session_h=([\d.]+) left_h=([\d.]+) gpu=\[0, (\d+) %, (\d+) MiB \| 1, (\d+) %, (\d+) MiB\]',text):
+  gpu.append(dict(h=float(m[1]),u0=int(m[3]),u1=int(m[5]),m0=int(m[4]),m1=int(m[6])))
+  left=float(m[2])
+ mm=re.findall(r'left_h=([\d.]+)',text)
+ if mm:add('Giờ còn lại của phiên Kaggle',f'{float(mm[-1]):.2f} giờ')
+ marks=[('Chuẩn bị & cài thư viện','PHASE setup' in text,''),('Trộn ASR & tăng mẫu yếu','OVERSAMPLE' in text,''),('Nối mẫu tổng hợp','SYNTH_MIX' in text,''),
+        ('Kiểm token & preflight',bool(re.search(r'^READY',text,re.M)),''),('Train',('TRAIN_ONLY:' in text or 'TRAIN DONE' in text),f'bước {steps[-1][0]}' if steps else ''),
+        ('Lưu checkpoint & kết thúc','TRAIN_ONLY:' in text,'')]
+ seen_open=False
+ for name,done,note in marks:
+  state='done' if done else ('pending' if seen_open else 'running');seen_open=seen_open or not done
+  phases.append(dict(name=name,state=state,note=note[:100]))
+ return dict(facts=facts[:30],phases=phases,stepSec=step_sec[-200:],gpu=gpu[-400:],warnings=warn[:10])
 
 def main():
  previous=load_state()
@@ -301,8 +372,8 @@ def main():
   c=config(path,handle,asr)
   status=cmd('kernels','status',handle)
   side={}
-  with ThreadPoolExecutor(max_workers=2) as pool:
-   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN,DUY_EVAL)}
+  with ThreadPoolExecutor(max_workers=3) as pool:
+   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN,DUY_EVAL,KHANG_TRAIN)}
    text=stream(handle)
    for h,job in jobs.items():
     try:side[h]=job.result(timeout=60)
@@ -395,6 +466,21 @@ def main():
     except Exception as error:print(f'Duy eval events skipped: {type(error).__name__}',flush=True)
     state['events']=state['events'][-300:]
    except Exception as error:print(f'Peer train (Duy) skipped: {type(error).__name__}',flush=True)
+  if side.get(KHANG_TRAIN):
+   # Khang's run: its own peer panel; any failure here never touches the pinned run or the other panels.
+   try:
+    from kaggle.api.kaggle_api_extended import KaggleApi as _ApiK
+    from kagglesdk.kernels.types.kernels_api_service import ApiGetKernelRequest as _ReqK
+    _apiK=_ApiK();_apiK.authenticate()
+    with _apiK.build_kaggle_client() as _clientK:
+     _rk=_ReqK();_rk.user_name,_rk.kernel_slug=KHANG_TRAIN.split('/')
+     numberK=_clientK.kernels.kernels_api_client.get_kernel(_rk).metadata.current_version_number
+    _sk=cmd('kernels','status',KHANG_TRAIN)
+    khang=peer_train(side[KHANG_TRAIN],f'{KHANG_TRAIN}/{numberK}','complete' if 'COMPLETE' in _sk else 'error' if ('ERROR' in _sk or 'CANCEL' in _sk) else 'running' if ('RUNNING' in _sk or 'QUEUED' in _sk) else 'unknown','Train · Khang')
+    try:khang['detail']=khang_detail(side[KHANG_TRAIN])
+    except Exception as error:print(f'Khang detail skipped: {type(error).__name__}',flush=True)
+    state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Khang')]+[khang]
+   except Exception as error:print(f'Peer train (Khang) skipped: {type(error).__name__}',flush=True)
   state.update(updatedAt=utc(),source='kaggle')
   if 'COMPLETE' in status:state.update(status='complete',phase='finished')
   elif 'ERROR' in status or 'CANCEL' in status:state.update(status='error')
