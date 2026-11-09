@@ -11,6 +11,7 @@ TRAIN='khangung/lifemate-v15-2-train'
 ASR_VERSION=4
 SIDE='qminh7706/lifemate-v17-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
 SIDE_TRAIN='qminh7706/lifemate-v16-2-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
+DUY_EVAL='castoraletheia/lifemate-v17-eval-307-public-634'  # log-only: Duy's 307 + public eval, shown inside Duy's panel as eval progress
 DUY_TRAIN='castoraletheia/lifemate-v17-train'  # log-only: Duy's training run, shown as a "Train · Duy" peer panel
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
@@ -301,7 +302,7 @@ def main():
   status=cmd('kernels','status',handle)
   side={}
   with ThreadPoolExecutor(max_workers=2) as pool:
-   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN)}
+   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN,DUY_EVAL)}
    text=stream(handle)
    for h,job in jobs.items():
     try:side[h]=job.result(timeout=60)
@@ -341,6 +342,17 @@ def main():
      numberD=_clientD.kernels.kernels_api_client.get_kernel(_rd).metadata.current_version_number
     _sd=cmd('kernels','status',DUY_TRAIN)
     duy=peer_train(side[DUY_TRAIN],f'{DUY_TRAIN}/{numberD}','complete' if 'COMPLETE' in _sd else 'error' if ('ERROR' in _sd or 'CANCEL' in _sd) else 'running' if ('RUNNING' in _sd or 'QUEUED' in _sd) else 'unknown','Train · Duy')
+    try:
+     # Duy's eval notebook: last EVAL_SAMPLE line = live 307 progress (score avg so far); only shown while that run is live or just finished.
+     _last=None
+     for _l in (side.get(DUY_EVAL) or '').splitlines():
+      _m=re.match(r'^(?:\[[\w.-]{1,40}\]\s*)?EVAL_SAMPLE (\{.*\})',_l.strip())
+      if _m:_last=json.loads(_m[1])
+     if _last:
+      _se=cmd('kernels','status',DUY_EVAL)
+      duy['evalProgress']=dict(name='307 · Duy' if int(_last['total'])<=400 else 'public · Duy',n=int(_last['n']),total=int(_last['total']),avg=float(_last['avg']))
+      duy['evalStatus']='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running'
+    except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
     state['events']=state['events'][-300:]
