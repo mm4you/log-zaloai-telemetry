@@ -456,8 +456,23 @@ def khang_detail(text):
  for (s0,h0),(s1,h1) in zip(steps,steps[1:]):
   if s1>s0:step_sec.append(dict(step=s1,sec=round((h1-h0)*3600/(s1-s0),1)))
  if steps:
-  add('Bước mới nhất',f'{steps[-1][0]} · {steps[-1][1]:.2f} giờ'+(f' · còn khoảng {last_eta:.1f} giờ' if last_eta is not None else ''))
+  add('Bước train mới nhất',f'{steps[-1][0]} · {steps[-1][1]:.2f} giờ kể từ lúc bắt đầu train')
  if nan>=4:warn.append(f'grad_norm = NaN ở {nan} bước train (một vài bước đầu là bình thường với fp16; nhiều bước liên tiếp thì cần xem lại).')
+ hb=[];b2=None;u2=None;kc=0
+ for raw in text.splitlines():
+  ln=raw.strip()
+  s2=re.match(r'^TRAIN STEP (\d+)/(\d+) \(global (\d+)\)',ln)
+  if s2:b2=int(s2[3])-int(s2[1]);continue
+  if b2 is not None and ln.startswith('{') and re.search(r"['\"]loss['\"]\s*:",ln):
+   try:ep=float(ast.literal_eval(ln)['epoch'])
+   except (ValueError,SyntaxError,KeyError,TypeError):continue
+   u2=u2 or ep;kk=round(ep/u2) if u2 else 0
+   if kk>kc:kc=kk
+   continue
+  h2=re.match(r'^HEARTBEAT phase=train session_h=([\d.]+)',ln)
+  if h2 and kc>0:hb.append((float(h2[1]),kc))
+ hs=[dict(step=b2+k1,sec=round((h1-h0)*3600/(k1-k0),1)) for (h0,k0),(h1,k1) in zip(hb,hb[1:]) if k1>k0 and h1>h0]
+ if len(hs)>=1:step_sec=hs
  for m in re.finditer(r'session_h=([\d.]+) left_h=([\d.]+) gpu=\[0, (\d+) %, (\d+) MiB \| 1, (\d+) %, (\d+) MiB\]',text):
   gpu.append(dict(h=float(m[1]),u0=int(m[3]),u1=int(m[5]),m0=int(m[4]),m1=int(m[6])))
   left=float(m[2])
