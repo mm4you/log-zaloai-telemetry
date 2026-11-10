@@ -12,7 +12,7 @@ ASR_VERSION=4
 SIDE='qminh7706/lifemate-v17-1-asr'  # log-only: its lines fill the ASR rows of the notebook log; the pinned run is untouched
 SIDE_TRAIN='qminh7706/lifemate-v20-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
 DUY_EVAL='castoraletheia/lifemate-v17-eval-307-public-634'  # log-only: Duy's 307 + public eval, shown inside Duy's panel as eval progress
-DUY_TRAIN='castoraletheia/lifemate-v17-train'  # log-only: Duy's training run, shown as a "Train · Duy" peer panel
+DUY_TRAIN='castoraletheia/lifemate-train-v19'  # log-only: Duy's v19 training run (75 steps, syn_v3), shown as a "Train · Duy" peer panel
 KHANG_TRAIN='khangung/lifemate-v18-train'  # log-only: Khang's train-only run (step 300 + synthetic rows), shown as a "Train · Khang" peer panel
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
@@ -508,7 +508,7 @@ def main():
   status=cmd('kernels','status',handle)
   side={}
   with ThreadPoolExecutor(max_workers=3) as pool:
-   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN,DUY_EVAL,KHANG_TRAIN)}
+   jobs={} if asr else {h:pool.submit(stream,h) for h in (SIDE,SIDE_TRAIN,DUY_TRAIN,KHANG_TRAIN)}  # DUY_EVAL dropped: the old v17 eval notebook would attach stale 307/public progress to the v19 panel
    text=stream(handle)
    for h,job in jobs.items():
     try:side[h]=job.result(timeout=60)
