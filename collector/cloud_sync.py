@@ -457,7 +457,7 @@ def khang_detail(text):
   if s1>s0:step_sec.append(dict(step=s1,sec=round((h1-h0)*3600/(s1-s0),1)))
  if steps:
   add('Bước mới nhất',f'{steps[-1][0]} · {steps[-1][1]:.2f} giờ'+(f' · còn khoảng {last_eta:.1f} giờ' if last_eta is not None else ''))
- if nan:warn.append(f'grad_norm = NaN ở {nan} bước train (fp16 có thể bỏ qua vài bước đầu; theo dõi val loss ở bước 25).')
+ if nan>=4:warn.append(f'grad_norm = NaN ở {nan} bước train (một vài bước đầu là bình thường với fp16; nhiều bước liên tiếp thì cần xem lại).')
  for m in re.finditer(r'session_h=([\d.]+) left_h=([\d.]+) gpu=\[0, (\d+) %, (\d+) MiB \| 1, (\d+) %, (\d+) MiB\]',text):
   gpu.append(dict(h=float(m[1]),u0=int(m[3]),u1=int(m[5]),m0=int(m[4]),m1=int(m[6])))
   left=float(m[2])
