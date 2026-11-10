@@ -299,6 +299,52 @@ def peer_train(text,handle,status,label='Train · Minh'):
   out['agent']=rows[-100:]
  return out
 
+def kernel_params(handle,gpu_text=''):
+ """Effective hyper-parameters of a train notebook, read from its own source (CONFIG + settings cell). Never raises."""
+ try:
+  directory=SOURCE_CACHE/('params_'+handle.replace('/','_'))
+  if not (directory/'kernel-metadata.json').exists():cmd('kernels','pull',handle,'-p',str(directory),'-m')
+  meta=json.loads((directory/'kernel-metadata.json').read_text(encoding='utf-8-sig'))
+  nb=json.loads((directory/Path(meta['code_file']).name).read_text(encoding='utf-8-sig'))
+  source='\n'.join(''.join(c['source']) for c in nb['cells'] if c['cell_type']=='code' and not ''.join(c['source']).startswith('%%'))
+  values={}
+  for node in ast.parse(source).body:
+   if not isinstance(node,ast.Assign):continue
+   try:
+    if isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Attribute) and node.value.func.attr=='loads':value=json.loads(ast.literal_eval(node.value.args[0]))
+    else:value=ast.literal_eval(node.value)
+   except (ValueError,TypeError,SyntaxError):continue
+   for target in node.targets:
+    if isinstance(target,ast.Name):values[target.id]=value
+  cfg=values.get('CONFIG',{});t=dict(cfg.get('training',{}));m=cfg.get('model',{});a=cfg.get('agent',{})
+  # the settings cell overrides the embedded config at run time
+  if 'LEARNING_RATE' in values:t['learning_rate']=values['LEARNING_RATE']
+  if 'TRAIN_STEPS' in values:t['max_additional_steps']=values['TRAIN_STEPS']
+  if 'EVAL_EVERY' in values:t['eval_every']=values['EVAL_EVERY']
+  if 'EARLY_STOP_PATIENCE' in values:t['early_stopping_patience']=values['EARLY_STOP_PATIENCE']
+  out=[]
+  def add(g,k,v):
+   if v is not None and v!='':out.append(dict(g=g,k=k[:40],v=str(v)[:200]))
+  add('Mô hình','Model nền',m.get('id'));add('Mô hình','LoRA rank',t.get('lora_rank'));add('Mô hình','Lớp gắn LoRA',t.get('target_modules'))
+  pf=values.get('PARENT_FROM')
+  start={'minh_v17_2':'Minh v17-2, bước 300 (sha256 '+str(values.get('PARENT_SHA256') or '')[:8]+'…)','duy_250':'Duy, bước 250'}.get(pf) if pf else None
+  add('Mô hình','Điểm xuất phát',start or ('train mới từ model gốc' if m.get('mode')=='fresh' else m.get('parent_version')))
+  lr=t.get('learning_rate');add('Tối ưu','Learning rate đỉnh',f'{lr:g}' if isinstance(lr,(int,float)) else lr);add('Tối ưu','Lịch LR',t.get('scheduler'))
+  add('Tối ưu','Warmup',f"{float(t['warmup_ratio'])*100:g}% số bước" if t.get('warmup_ratio') is not None else None);add('Tối ưu','Weight decay',t.get('weight_decay'))
+  if all(isinstance(t.get(x),int) for x in ('per_device_batch_size','gradient_accumulation_steps','world_size')):
+   add('Tối ưu','Batch hiệu dụng',f"{t['per_device_batch_size']*t['gradient_accumulation_steps']*t['world_size']} ({t['per_device_batch_size']}×{t['gradient_accumulation_steps']} tích lũy × {t['world_size']} GPU)")
+  add('Tối ưu','Độ dài tối đa',t.get('max_seq_len'));add('Tối ưu','Seed',cfg.get('seed'))
+  add('Lịch chạy','Số bước train',t.get('max_additional_steps'));add('Lịch chạy','Đo val loss mỗi',f"{t.get('eval_every')} bước" if t.get('eval_every') else None)
+  add('Lịch chạy','Lưu checkpoint mỗi',f"{t.get('save_every')} bước" if t.get('save_every') else None)
+  ep=t.get('early_stopping_patience');add('Lịch chạy','Dừng sớm',('tắt' if isinstance(ep,int) and ep>=50 else f'sau {ep} lần không cải thiện') if ep is not None else None)
+  if 'ASR_FRACTION' in values:add('Dữ liệu','Tỉ lệ mẫu dùng ASR',f"{float(values['ASR_FRACTION'])*100:g}%")
+  if values.get('SYN_N'):add('Dữ liệu','Mẫu tổng hợp thêm',f"{values['SYN_N']} dòng ({values.get('SYN_FILE','')})")
+  add('Dữ liệu','Oversample nhóm yếu',f"{t.get('rare_tool_copies')} bản sao cho tool hiếm" if t.get('rare_tool_copies') else None)
+  add('Agent','Số lệnh tối đa / mẫu',a.get('max_tool_calls'));add('Agent','Token sinh tối đa',a.get('max_new_tokens'));add('Agent','Giới hạn thời gian / mẫu',f"{a.get('sample_timeout_seconds')} giây" if a.get('sample_timeout_seconds') else None)
+  return out[:60]
+ except Exception as error:
+  print(f'Params skipped for {handle}: {type(error).__name__}',flush=True);return []
+
 def khang_detail(text):
  """Facts, phase checklist, warnings and per-step series of Khang's train-only notebook, read only from its own log."""
  facts=[];phases=[];step_sec=[];gpu=[];warn=[]
@@ -410,7 +456,8 @@ def main():
      _r=_Req();_r.user_name,_r.kernel_slug=SIDE_TRAIN.split('/')
      number=_client.kernels.kernels_api_client.get_kernel(_r).metadata.current_version_number
     _st=cmd('kernels','status',SIDE_TRAIN)
-    state['peers']=[peer_train(side[SIDE_TRAIN],f'{SIDE_TRAIN}/{number}','complete' if 'COMPLETE' in _st else 'error' if ('ERROR' in _st or 'CANCEL' in _st) else 'running' if ('RUNNING' in _st or 'QUEUED' in _st) else 'unknown')]
+    _mp=peer_train(side[SIDE_TRAIN],f'{SIDE_TRAIN}/{number}','complete' if 'COMPLETE' in _st else 'error' if ('ERROR' in _st or 'CANCEL' in _st) else 'running' if ('RUNNING' in _st or 'QUEUED' in _st) else 'unknown')
+    _mp['params']=kernel_params(SIDE_TRAIN);state['peers']=[_mp]
    except Exception as error:print(f'Peer train skipped: {type(error).__name__}',flush=True)
   if side.get(DUY_TRAIN):
    # Duy's run: its own panel only (no Minh-style event rows). Kept after Minh's panel; a failure here never touches the pinned run.
@@ -451,6 +498,7 @@ def main():
       duy['evalLive']=dict(name='public · Duy',kind='public',status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_pa),total=_pt,avg=(_f307['avg'] if _f307 else 0.0),stateOk=sum(1 for r in _pa if r.get('stopped') is True),within20=sum(1 for s in _ps if s<=20),over30=sum(1 for r in _pa if r.get('over30') or float(r['sec'])>=30),meanSec=_pm,lastN=int(_pa[-1]['n']),etaSeconds=max(0,(_pt-int(_pa[-1]['n']))*_pm),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=-1.0 if not r.get('err') else -2.0,calls=len(r.get('pred') or [])) for r in _pa[-700:]],**({'final307':_f307} if _f307 else {}))
       duy['evalProgress']=dict(name='public · Duy',n=len(_pa),total=_pt,avg=_pm)
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
+    duy['params']=kernel_params(DUY_TRAIN)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
     try:
@@ -487,6 +535,7 @@ def main():
      numberK=_clientK.kernels.kernels_api_client.get_kernel(_rk).metadata.current_version_number
     _sk=cmd('kernels','status',KHANG_TRAIN)
     khang=peer_train(side[KHANG_TRAIN],f'{KHANG_TRAIN}/{numberK}','complete' if 'COMPLETE' in _sk else 'error' if ('ERROR' in _sk or 'CANCEL' in _sk) else 'running' if ('RUNNING' in _sk or 'QUEUED' in _sk) else 'unknown','Train · Khang')
+    khang['params']=kernel_params(KHANG_TRAIN)
     try:khang['detail']=khang_detail(side[KHANG_TRAIN])
     except Exception as error:print(f'Khang detail skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Khang')]+[khang]
