@@ -239,7 +239,7 @@ def peer_train(text,handle,status,label='Train · Minh'):
  """Loss series of another person's training notebook, read only from its own log; the pinned run is never touched."""
  ver=re.search(r'-v(\d+)-',handle)
  out=dict(label=label,kernel=handle,version=f'V{ver[1]}' if ver else 'V16',status=status,phase='preparing',step=0,targetStep=None,hours=0.0,evalEvery=None,train=[],evaluations=[],baseline=None,evalProgress=None,stopped=None,updatedAt=utc())
- points={};evals={};agents={};cur=0;base=None;unit=None
+ points={};evals={};agents={};cur=0;base=None;unit=None;lrs={};gns={}
  for raw in text.splitlines():
   line=raw.strip()
   m=re.match(r'^(?:LONG RUN|TRAIN) PROGRESS: global=(\d+),? new=(\d+)/(\d+),? hours=([\d.]+)',line)
@@ -273,6 +273,12 @@ def peer_train(text,handle,status,label='Train · Minh'):
      if k>=1:
       cur=base+k;points[cur]=float(d['loss']);out.update(step=max(out['step'],cur),phase='training')
     else:points[cur]=float(d['loss'])
+    try:lrs[cur]=float(d.get('learning_rate'))
+    except (TypeError,ValueError):pass
+    try:
+     g=float(d.get('grad_norm'))
+     if g==g:gns[cur]=g
+    except (TypeError,ValueError):pass
    except (ValueError,SyntaxError,KeyError,TypeError):pass
   elif line.startswith('VAL_LOSS:'):
    try:
@@ -287,7 +293,7 @@ def peer_train(text,handle,status,label='Train · Minh'):
      d=json.loads(t[2]);out['evalProgress']=dict(name=t[1],n=int(d['n']),total=int(d['total']),avg=float(d['avg']))
     except (ValueError,KeyError,TypeError):pass
  if 'PHASE train' in text and out['phase']=='training':out['phase']='finished'
- out['train']=[dict(step=s,loss=l) for s,l in sorted(points.items()) if l==l][-600:]
+ out['train']=[dict(step=s,loss=l,**({'learningRate':lrs[s]} if s in lrs and lrs[s]>=0 else {}),**({'gradNorm':gns[s]} if s in gns else {})) for s,l in sorted(points.items()) if l==l][-600:]
  ev=sorted(evals.items())
  out['evaluations']=[dict(step=s,loss=l) for s,l in ev][-100:]
  if len(ev)>1:out['evalEvery']=max(1,min(b[0]-a[0] for a,b in zip(ev,ev[1:])))
