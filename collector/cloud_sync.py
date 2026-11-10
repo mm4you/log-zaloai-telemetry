@@ -455,8 +455,6 @@ def khang_detail(text):
   if m[6]=='nan':nan+=1
  for (s0,h0),(s1,h1) in zip(steps,steps[1:]):
   if s1>s0:step_sec.append(dict(step=s1,sec=round((h1-h0)*3600/(s1-s0),1)))
- if steps:
-  add('Bước train mới nhất',f'{steps[-1][0]} · {steps[-1][1]:.2f} giờ kể từ lúc bắt đầu train')
  if nan>=4:warn.append(f'grad_norm = NaN ở {nan} bước train (một vài bước đầu là bình thường với fp16; nhiều bước liên tiếp thì cần xem lại).')
  hb=[];b2=None;u2=None;kc=0
  for raw in text.splitlines():
