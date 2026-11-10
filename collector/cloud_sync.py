@@ -13,7 +13,7 @@ SIDE='qminh7706/lifemate-v17-1-asr'  # log-only: its lines fill the ASR rows of 
 SIDE_TRAIN='qminh7706/lifemate-v20-train'  # log-only too: shown as "Minh · ..." rows after the pinned run's own rows
 DUY_EVAL='castoraletheia/lifemate-v17-eval-307-public-634'  # log-only: Duy's 307 + public eval, shown inside Duy's panel as eval progress
 DUY_TRAIN='castoraletheia/lifemate-v17-train'  # log-only: Duy's training run, shown as a "Train · Duy" peer panel
-KHANG_TRAIN='khangung/lifemate-v17-3-train-syn'  # log-only: Khang's train-only run (step 300 + synthetic rows), shown as a "Train · Khang" peer panel
+KHANG_TRAIN='khangung/lifemate-v18-train'  # log-only: Khang's train-only run (step 300 + synthetic rows), shown as a "Train · Khang" peer panel
 SOURCE_CACHE=Path(tempfile.mkdtemp(prefix='lifemate-source-'))
 
 def cmd(*args):
