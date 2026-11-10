@@ -305,6 +305,66 @@ def peer_train(text,handle,status,label='Train · Minh'):
   out['agent']=rows[-100:]
  return out
 
+def pretty_log(text,n=90):
+ """Whitelisted, re-formatted lines of a train notebook's log. Raw log lines are never published (nothing from the dataset can leak)."""
+ out=[];last=None;base=None;unit=None;hours=None;total=None;baseline=None;last_k=0
+ def add(k,m):out.append(dict(k=k,m=m[:200]))
+ for raw in text.splitlines():
+  line=raw.strip()
+  if not line or line==last:continue
+  last=line
+  if line.startswith('TRAIN STEP '):
+   s=re.match(r'^TRAIN STEP (\d+)/(\d+) \(global (\d+)\) \|.*?([\d.]+) h elapsed',line)
+   if s:base=int(s[3])-int(s[1]);total=int(s[2]);hours=float(s[4])
+   continue
+  if line.startswith('{') and re.search(r"['\"]loss['\"]\s*:",line):
+   try:d=ast.literal_eval(line);ep=float(d['epoch']);loss=float(d['loss'])
+   except (ValueError,SyntaxError,KeyError,TypeError):continue
+   if base is None:continue
+   unit=unit or ep
+   k=round(ep/unit) if unit else 0
+   if k<1 or k<=last_k:continue
+   last_k=k
+   try:lr=f"{float(d['learning_rate']):.1e}"
+   except (KeyError,TypeError,ValueError):lr='—'
+   try:
+    g=float(d['grad_norm']);gn=f'{g:.2f}' if g==g else 'NaN'
+   except (KeyError,TypeError,ValueError):gn='—'
+   add('step',f"bước {k}"+(f"/{total}" if total else '')+f" · loss {loss:.4f} · lr {lr} · grad {gn}"+(f" · {hours:.2f} giờ" if hours else ''))
+   continue
+  if line.startswith('VAL_LOSS:'):
+   try:d=json.loads(line.split(':',1)[1]);v=float(d['val_loss'])
+   except (ValueError,KeyError,TypeError):continue
+   if baseline is None:baseline=v;add('val',f"đo val loss xuất phát · bước {d.get('step')} → {v:.4f} · mất {float(d.get('eval_seconds') or 0):.0f} giây")
+   else:add('val',f"đo val loss · bước {d.get('step')} → {v:.4f} ({(v-baseline)/baseline*100:+.1f}% so với xuất phát) · mất {float(d.get('eval_seconds') or 0):.0f} giây")
+   continue
+  if line.startswith('PHASE '):add('phase',line);continue
+  if line.startswith('HEARTBEAT'):
+   h=re.search(r'session_h=([\d.]+).*?gpu=\[0, (\d+) %, (\d+) MiB \| 1, (\d+) %, (\d+) MiB\]',line)
+   if h:add('gpu',f"GPU {h[2]}% / {h[4]}% · VRAM {int(h[3])/1024:.1f} / {int(h[5])/1024:.1f} GiB · phiên {float(h[1]):.2f} giờ")
+   continue
+  def obj(prefix):
+   try:return ast.literal_eval(line[len(prefix):].strip())
+   except (ValueError,SyntaxError):return None
+  if line.startswith('PARENT:'):
+   m=re.search(r'step (\d+).*?sha256 (\w{8})',line);add('info',f"Điểm xuất phát · bước {m[1]} · sha256 {m[2]}… · đã ghim" if m else line);continue
+  if line.startswith('ASR MIX'):
+   a=obj('ASR MIX')
+   add('info',f"Trộn ASR · {a['selected_asr']}/{a['approved']} mẫu dùng ASR · {a['rows']} dòng" if a else line);continue
+  if line.startswith('OVERSAMPLE'):
+   a=obj('OVERSAMPLE');add('info',f"Tăng mẫu nhóm yếu · {a['weak_episodes']} mẫu · {a['rows_before']} → {a['rows_after']} dòng" if a else line);continue
+  if line.startswith('SYNTH_MIX'):
+   try:a=json.loads(line[len('SYNTH_MIX'):]);add('info',f"Nối dữ liệu tổng hợp · {a['rows']} dòng · bỏ {a['dropped_too_long']} quá dài")
+   except (ValueError,KeyError):add('info',line)
+   continue
+  if line.startswith('TRAIN_DATA:'):
+   try:a=json.loads(line.split(':',1)[1]);add('info',f"Dữ liệu train · {a['rows']} dòng · batch hiệu dụng {a['effective_batch']} · {a['valid_episodes']} mẫu validation")
+   except (ValueError,KeyError):add('info',line)
+   continue
+  if re.match(r'^(V16 TRAIN START|READY|TRAIN_ONLY|TRAIN DONE|EARLY STOP|LONG RUN COMPLETE|EVAL SPLIT|ASR V17 CACHE)',line):add('info',line);continue
+  if re.match(r'^(Traceback|[A-Za-z]*Error:|RuntimeError|CUDA out of memory)',line) and 'pip' not in line and 'Backend impl' not in line:add('warn',line)
+ return out[-n:]
+
 def kernel_params(handle,gpu_text=''):
  """Effective hyper-parameters of a train notebook, read from its own source (CONFIG + settings cell). Never raises."""
  try:
@@ -463,7 +523,7 @@ def main():
      number=_client.kernels.kernels_api_client.get_kernel(_r).metadata.current_version_number
     _st=cmd('kernels','status',SIDE_TRAIN)
     _mp=peer_train(side[SIDE_TRAIN],f'{SIDE_TRAIN}/{number}','complete' if 'COMPLETE' in _st else 'error' if ('ERROR' in _st or 'CANCEL' in _st) else 'running' if ('RUNNING' in _st or 'QUEUED' in _st) else 'unknown')
-    _mp['params']=kernel_params(SIDE_TRAIN);state['peers']=[_mp]
+    _mp['params']=kernel_params(SIDE_TRAIN);_mp['log']=pretty_log(side[SIDE_TRAIN]);state['peers']=[_mp]
    except Exception as error:print(f'Peer train skipped: {type(error).__name__}',flush=True)
   if side.get(DUY_TRAIN):
    # Duy's run: its own panel only (no Minh-style event rows). Kept after Minh's panel; a failure here never touches the pinned run.
@@ -504,7 +564,7 @@ def main():
       duy['evalLive']=dict(name='public · Duy',kind='public',status='complete' if 'COMPLETE' in _se else 'error' if ('ERROR' in _se or 'CANCEL' in _se) else 'running',n=len(_pa),total=_pt,avg=(_f307['avg'] if _f307 else 0.0),stateOk=sum(1 for r in _pa if r.get('stopped') is True),within20=sum(1 for s in _ps if s<=20),over30=sum(1 for r in _pa if r.get('over30') or float(r['sec'])>=30),meanSec=_pm,lastN=int(_pa[-1]['n']),etaSeconds=max(0,(_pt-int(_pa[-1]['n']))*_pm),recent=[dict(n=int(r['n']),id=str(r['id'])[:40],sec=float(r['sec']),score=-1.0 if not r.get('err') else -2.0,calls=len(r.get('pred') or [])) for r in _pa[-700:]],**({'final307':_f307} if _f307 else {}))
       duy['evalProgress']=dict(name='public · Duy',n=len(_pa),total=_pt,avg=_pm)
     except Exception as error:print(f'Duy eval progress skipped: {type(error).__name__}',flush=True)
-    duy['params']=kernel_params(DUY_TRAIN)
+    duy['params']=kernel_params(DUY_TRAIN);duy['log']=pretty_log(side[DUY_TRAIN])
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Duy')]+[duy]
     state['events']+=[dict(r,stage='Qwen',message=('Duy · '+r['message'])[:240]) for r in events(side[DUY_TRAIN],'Duy',[])[-40:]]
     try:
@@ -541,7 +601,7 @@ def main():
      numberK=_clientK.kernels.kernels_api_client.get_kernel(_rk).metadata.current_version_number
     _sk=cmd('kernels','status',KHANG_TRAIN)
     khang=peer_train(side[KHANG_TRAIN],f'{KHANG_TRAIN}/{numberK}','complete' if 'COMPLETE' in _sk else 'error' if ('ERROR' in _sk or 'CANCEL' in _sk) else 'running' if ('RUNNING' in _sk or 'QUEUED' in _sk) else 'unknown','Train · Khang')
-    khang['params']=kernel_params(KHANG_TRAIN)
+    khang['params']=kernel_params(KHANG_TRAIN);khang['log']=pretty_log(side[KHANG_TRAIN])
     try:khang['detail']=khang_detail(side[KHANG_TRAIN])
     except Exception as error:print(f'Khang detail skipped: {type(error).__name__}',flush=True)
     state['peers']=[p for p in state.get('peers',[]) if not p['label'].endswith('Khang')]+[khang]
